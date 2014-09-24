@@ -1,0 +1,223 @@
+library(expm)
+
+#function for creating the matrix B 
+Bmat <- function(Matrix)
+{
+  v <- colSums(Matrix)
+  v[which(v==0)] <- min(v[v!=0])/1000
+  return(as.matrix(Matrix) %*% diag(1/v))
+}
+
+# function for creating the matrix e^(t(B-I))k_j
+Exp_matrix <- function(A,t)
+{
+  B <- Bmat(A)
+  
+  Adj <- as.matrix(expm(t*(B-diag(1,nrow(B))),method = "Pade",order = 8))
+  Adj <- Adj %*% diag(colSums(A))
+  
+}
+
+# function for the modification of the incidence matrix
+# resulting from merging communities OldCom and NewCom
+# the row and column corresponding to OldCom are erased 
+Erase <- function(A,OldCom,NewCom)
+{
+  A[NewCom,] <- A[NewCom,]+ A[OldCom,]
+  A[NewCom,NewCom] <- A[NewCom,NewCom] + A[OldCom,OldCom]
+  A[,NewCom] <- A[NewCom,]
+  return(A[-which(rownames(A)==OldCom),-which(colnames(A)==OldCom)])
+}
+
+# function for updating the list of neighbors of each node in 
+# the incidence matrix. (Each vertex has its unique id assigned to the name
+# stored in ID.)
+NewNeighbors <- function(A,Neighbors,ID)
+{
+  for (name in rownames(A))
+  {
+    Neighbors[[ ID[name,"ID"] ]] <- rownames(A)[((which(A[name,]!=0)))]
+  }
+  return(Neighbors)
+}
+
+# NodesGropus is a table which stores the number of the community to which 
+# a particular node is currently assigned.
+# NewNodesGroups updates this table when the nodes from community OldCom are moved to NewCom
+NewNodesGroup <- function(OldCom,NewCom,NodesGroups)
+{
+  OldNumber <- NodesGroups[OldCom,"community"]
+  NewNumber <- NodesGroups[NewCom,"community"]
+  NodesGroups[which(NodesGroups$community==OldNumber),"community"] <- NewNumber
+  
+  return(NodesGroups)
+}
+
+# function for calculating the change of modularity when community Com1 is merged with community Com2
+# Adj denotes the matrix e^(t(B-I))k_j
+# A is the incidence matrix of communities
+Delta<- function(A,Adj,Com1,Com2,NodeGroups)
+{
+  WhichNode <- as.character(Com1)
+  Nodes1 <- which(NodeGroups$community == NodeGroups[Com1,"community"])
+  Nodes2 <- which(NodeGroups$community == NodeGroups[Com2,"community"])
+  
+  k_i_in <- sum(Adj[Nodes1,Nodes2])
+  m <- sum(A)/2
+  S_tot <- sum(A[Com2,])
+  k_i <- sum(A[Com1,])
+  
+  return (k_i_in/(m) -(k_i *S_tot)/(2*(m^2)) ) 
+}
+
+# function for creating symmetric incidence matrix from paired connections between nodes (undirected graph)
+AdjacencyMatrix <- function (Pairs)
+{
+  ids <- sort(unique(c(Pairs[,1],Pairs[,2]))) 
+  num_nodes <- length(ids)
+  AMatrix <- matrix(rep(0,num_nodes*num_nodes),num_nodes,num_nodes)    
+  rownames(AMatrix) <- as.character(ids)
+  colnames(AMatrix) <- as.character(ids)
+  
+  for (i in 1:nrow(Pairs))
+  {
+    AMatrix[as.character(Pairs[i,1]),as.character(Pairs[i,2])] <- Pairs[i,3]
+    AMatrix[as.character(Pairs[i,2]),as.character(Pairs[i,1])] <- Pairs[i,3]
+  }
+  
+  return (AMatrix)
+}
+
+# function for creating incidence matrix from paired connections between nodes (directed graph)
+AdjacencyMatrix_dir <- function (Pairs)
+{
+  ids <- sort(unique(c(Pairs[,1],Pairs[,2]))) 
+  num_nodes <- length(ids)
+  AMatrix <- matrix(rep(0,num_nodes*num_nodes),num_nodes,num_nodes)    
+  rownames(AMatrix) <- as.character(ids)
+  colnames(AMatrix) <- as.character(ids)
+  
+  for (i in 1:nrow(Pairs))
+  {
+    AMatrix[as.character(Pairs[i,1]),as.character(Pairs[i,2])] <- Pairs[i,3]
+  }
+  
+  return (AMatrix)
+}
+
+############
+
+# Main function:
+# I_Mat is the incidence matrix (possibly with weights) or paired data in 3 columns of the form (node1,node2,weight)
+# paired = FALSE if I_Mat is the incidence matrix, paired = TRUE if I_Mat is paired data
+# directed = TRUE if the graph is directed, otherwise directed = FALSE
+# t is the resolution parameter
+
+Communities_Resolution <- function(I_Mat, t = 1, paired = FALSE, directed=FALSE)
+{
+  
+  if (paired & !directed) 
+  {
+    I_Mat <- AdjacencyMatrix(I_Mat)  
+  }
+  if (paired & directed)
+  {
+    I_Mat <- AdjacencyMatrix_dir(I_Mat) 
+  }
+  
+  # CM is now the incidence matrix
+  CM <- as.matrix(I_Mat)
+  rownames(CM) <- colnames(I_Mat)
+  colnames(CM) <- rownames(CM)
+  
+  # Assigning unique ID to each node
+  ID <- matrix(,ncol=1,nrow=nrow(CM))
+  ID <- as.data.frame(ID)
+  colnames(ID) <- c("ID")
+  rownames(ID) <- rownames(CM) 
+  for ( i in 1:nrow(CM) )
+  {
+    ID[i,"ID"] <- i  
+  }
+  
+  # Initializing the list of neighbors of each node
+  Neighbors <- list()
+  for ( i in 1:nrow(CM))
+  {
+    name <- rownames(CM)[i] 
+    Neighbors[[ ID[name,"ID"] ]]<- rownames(CM)[which(CM[i,]!=0)]
+  }
+  
+  #Initializing the table that informs about the community number to which a particular node is assigned
+  NodesGroups <- matrix(,ncol=1,nrow=nrow(CM))
+  NodesGroups <- as.data.frame(NodesGroups)
+  colnames(NodesGroups) <- c("community")
+  rownames(NodesGroups) <- rownames(CM) 
+  for ( i in 1:nrow(NodesGroups) )
+  {
+    NodesGroups[i,"community"] <- i
+  }
+  
+  # computing the matrix e^(t(B-I))k_j
+  Adj <- Exp_matrix(CM,t)
+  colnames(Adj) <- rownames(Adj)
+  
+  logic <- 1
+  while (logic != 0 & nrow(CM) > 1 )
+  {
+    # names contains the names of communities which have not been "visited" yet in this iteration
+    # a community is "visited" if it is merged with some other community or it was confirmed that no 
+    # increase in modularity  can be achieved by merging this community with any other
+    names <- rownames(CM)
+    # logic = 1 means that some increase of modularity has been achieved in the iteration
+    logic <- 0
+    while (length(names) > 0)
+    { name1 <- names[1]
+      
+      max <- 0
+      # analyze all the nodes in the neighborhood of name1, if any
+      neighborhood <- setdiff(Neighbors[[ ID[name1,"ID"] ]],name1)
+      
+      if(length(neighborhood) > 0)
+      {
+        for ( name2 in neighborhood )
+        {
+          # calculate the difference in modularity when community name1 is merged with community name2
+          delta <- Delta(CM,Adj,name1,name2,NodesGroups)
+          # remember where the increase of modularity was highest
+          if(delta > max){max <- delta; where<-name2; logic<-1}
+        }
+      }
+      
+      # we have "visited" community name1 so we remove it from names
+      names <- setdiff(names,name1)    
+      if(max >0)
+      {
+        # If there has been an increase in modularity
+        # perform the merging that maximize this increase
+        # modify the incidence matrix CM
+        # modify the list of Neighbors and NodesGroups table accordingly
+        CM <- Erase(CM,name1,where)
+        Neighbors <- NewNeighbors(CM,Neighbors,ID)
+        NodesGroups <- NewNodesGroup(name1,where,NodesGroups)
+        
+        #now we have also "visited" community "where" so we remove it from names
+        names <- setdiff(names,where)
+        
+        if(length(CM) == 1) {CM <- as.matrix(CM)}
+      }
+      
+    }
+    
+  }
+  
+  # modify the numbers denoting communities so that they are consecutive natural numbers starting from 1 
+  s <- 1
+  for ( c in unique(NodesGroups[,1]))
+  {
+    NodesGroups[which(NodesGroups$community == c),1] <- s
+    s <- s + 1
+  }
+  
+  return (NodesGroups)  
+}
