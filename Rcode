@@ -1,0 +1,161 @@
+library(expm)
+
+Delta<- function(A,Adj,Com1,Com2,NodeGroups)
+{
+  WhichNode <- as.character(Com1)
+  Nodes1 <- which(NodeGroups$community == NodeGroups[Com1,"community"])
+  Nodes2 <- which(NodeGroups$community == NodeGroups[Com2,"community"])
+
+  k_i_in <- sum(Adj[Nodes1,Nodes2])
+  m <- sum(A)/2
+  S_tot <- sum(A[Com2,])
+  k_i <- sum(A[Com1,])
+  
+  return (k_i_in/(m) -(k_i *S_tot)/(2*(m^2)) ) 
+}
+
+Bmat <- function(Matrix)
+{
+  return(as.matrix(Matrix) %*% diag(1/colSums(Matrix)))
+}
+
+Exp_matrix <- function(A,p)
+{
+  B <- Bmat(A)
+  
+  Adj <- as.matrix(expm(p*(B-diag(1,nrow(B))),method = "Pade",order = 8))
+  Adj <- Adj %*% diag(colSums(A))
+  
+}
+
+Erase <- function(A,OldCom,NewCom)
+{
+  A[NewCom,] <- A[NewCom,]+ A[OldCom,]
+  A[NewCom,NewCom] <- A[NewCom,NewCom] + A[OldCom,OldCom]
+  A[,NewCom] <- A[NewCom,]
+  return(A[-which(rownames(A)==OldCom),-which(colnames(A)==OldCom)])
+}
+
+NewNeighbors <- function(A,Neighbors,ID)
+{
+  for (name in rownames(A))
+  {
+    Neighbors[[ ID[name,"ID"] ]] <- rownames(A)[((which(A[name,]!=0)))]
+  }
+  return(Neighbors)
+}
+
+NewNodesGroup <- function(OldCom,NewCom,NodesGroups)
+{
+  OldNumber <- NodesGroups[OldCom,"community"]
+  NewNumber <- NodesGroups[NewCom,"community"]
+  NodesGroups[which(NodesGroups$community==OldNumber),"community"] <- NewNumber
+  
+  return(NodesGroups)
+}
+
+AdjacencyMatrix <- function (Pairs)
+{
+  ids <- sort(unique(c(Pairs[,1],Pairs[,2]))) 
+  num_nodes <- length(ids)
+  AMatrix <- matrix(rep(0,num_nodes*num_nodes),num_nodes,num_nodes)    
+  rownames(AMatrix) <- as.character(ids)
+  colnames(AMatrix) <- as.character(ids)
+  
+  for (i in 1:nrow(Pairs))
+  {
+    AMatrix[as.character(Pairs[i,1]),as.character(Pairs[i,2])] <- Pairs[i,3]
+    AMatrix[as.character(Pairs[i,2]),as.character(Pairs[i,1])] <- Pairs[i,3]
+  }
+  
+  return (AMatrix)
+}
+
+############
+
+Communities_Resolution <- function(A, p, paired = FALSE)
+{
+  
+  if (paired) 
+  {
+  A <- AdjacencyMatrix(A)  
+  }
+
+CM <- as.matrix(A)
+rownames(CM) <- colnames(A)
+colnames(CM) <- rownames(CM)
+
+ID <- matrix(,ncol=1,nrow=nrow(CM))
+ID <- as.data.frame(ID)
+colnames(ID) <- c("ID")
+rownames(ID) <- rownames(CM) 
+  for ( i in 1:nrow(CM) )
+  {
+  ID[i,"ID"] <- i  
+  }
+
+Neighbors <- list()
+  for ( i in 1:nrow(CM))
+  {
+  name <- rownames(CM)[i] 
+  Neighbors[[ ID[name,"ID"] ]]<- rownames(CM)[which(CM[i,]!=0)]
+  }
+
+NodesGroups <- matrix(,ncol=1,nrow=nrow(CM))
+NodesGroups <- as.data.frame(NodesGroups)
+colnames(NodesGroups) <- c("community")
+rownames(NodesGroups) <- rownames(CM) 
+  for ( i in 1:nrow(NodesGroups) )
+  {
+  NodesGroups[i,"community"] <- i
+  }
+
+
+Adj <- Exp_matrix(CM,p)
+colnames(Adj) <- rownames(Adj)
+
+logic <- 1
+  while (logic != 0 & nrow(CM) > 1 )
+  {
+    names <- rownames(CM)
+    logic <- 0
+    while (length(names) > 0)
+    { name1 <- names[1]
+    
+      max <- 0
+      neighborhood <- setdiff(Neighbors[[ ID[name1,"ID"] ]],name1)
+    
+        if(length(neighborhood) > 0)
+        {
+          for ( name2 in neighborhood )
+          {
+          delta <- Delta(CM,Adj,name1,name2,NodesGroups)
+          if(delta > max){max <- delta; where<-name2; logic<-1}
+          }
+        }
+    
+      names <- setdiff(names,name1)    
+      if(max >0)
+      {
+      CM <- Erase(CM,name1,where)
+      Neighbors <- NewNeighbors(CM,Neighbors,ID)
+      NodesGroups <- NewNodesGroup(name1,where,NodesGroups)
+      names <- setdiff(names,where)
+      
+        if(length(CM) == 1) {CM <- as.matrix(CM)}
+      }
+    
+    }
+  
+  }
+
+t <- 1
+  for ( c in unique(NodesGroups[,1]))
+  {
+  NodesGroups[which(NodesGroups$community == c),1] <- t
+  t <- t + 1
+  }
+
+return (NodesGroups)
+
+}
